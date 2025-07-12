@@ -1,0 +1,1 @@
+### Simple Python module that converts whole github repositories (public) into JSON format.

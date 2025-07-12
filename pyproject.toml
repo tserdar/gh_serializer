@@ -1,0 +1,28 @@
+[project]
+name = "gh_serializer"
+version = "0.1.0"
+description = "Serialize public GitHub repositories into structured JSON for LLM workflows"
+authors = [{ name = "Serdar Tunçkol", email = "serdartunckol@outlook.com" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "GitPython>=3.1.0",
+    "requests==2.32.4",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/tserdar/gh_serializer"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["gh_serializer"]
+
+[tool.ruff.lint]
+select = ["ALL"]  # Enable all pydocstyle rules
+
+[tool.ruff]
+line-length = 120

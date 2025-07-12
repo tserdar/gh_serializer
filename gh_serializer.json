@@ -1,0 +1,68 @@
+[
+  {
+    "path": "pyproject.toml",
+    "language": "toml",
+    "type": "code",
+    "content": "[project]\nname = \"gh_serializer\"\nversion = \"0.1.0\"\ndescription = \"Serialize public GitHub repositories into structured JSON for LLM workflows\"\nauthors = [{ name = \"Serdar Tunçkol\", email = \"serdartunckol@outlook.com\" }]\nlicense = \"MIT\"\nreadme = \"README.md\"\nrequires-python = \">=3.12\"\ndependencies = [\n    \"GitPython>=3.1.0\",\n    \"requests==2.32.4\",\n    \"ruff==0.12.3\"\n]\n\n[project.urls]\n\"Homepage\" = \"https://github.com/tserdar/gh_serializer\"\n\n[build-system]\nrequires = [\"setuptools>=61.0\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[tool.setuptools.packages.find]\nwhere = [\"gh_serializer\"]\n\n[tool.ruff.lint]\nselect = [\"ALL\"]  # Enable all pydocstyle rules\n\n[tool.ruff]\nline-length = 120"
+  },
+  {
+    "path": "README.md",
+    "language": "md",
+    "type": "code",
+    "content": "This is a simple Python module that converts whole github repositories (public) into JSON format. \n\nIt uses a list of supported file extensions and stems to filter out files. \n\nThe output is designed to be LLM-friendly.\n"
+  },
+  {
+    "path": ".vscode/settings.json",
+    "language": "json",
+    "type": "code",
+    "content": "{\n    \"python-envs.pythonProjects\": []\n}"
+  },
+  {
+    "path": "gh_serializer/examples/demo.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Demo to test the serializer.\"\"\"\n\nfrom gh_serializer.fetch import fetch_repo_via_zip\nfrom gh_serializer.serialize import save_to_json\n\nfiles = fetch_repo_via_zip(\"https://github.com/tserdar/playground_web_app\", \"main\")\nsave_to_json(files, \"playground_web_app.json\")\n"
+  },
+  {
+    "path": "gh_serializer/examples/__init__.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Init file for examples.\"\"\"\n"
+  },
+  {
+    "path": "gh_serializer/gh_serializer/fetch.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Script that contains fetch functionality for gh_serializer.\"\"\"\n\nfrom __future__ import annotations\n\nimport logging\nimport os\nimport tempfile\nimport zipfile\nfrom pathlib import Path\nfrom typing import Any\nfrom urllib.parse import urlparse\n\nimport requests\nfrom requests.exceptions import RequestException\n\nfrom gh_serializer.static.file_types import SUPPORTED_EXTENSIONS, SUPPORTED_STEMS\n\nlogger = logging.getLogger(__name__)\n\n\ndef parse_gh_repo_url(repo_url: str) -> tuple[str, str]:\n    \"\"\"Parse GitHub repository URL into owner and repository name.\"\"\"\n    parts = urlparse(repo_url)\n    if \"github.com\" not in parts.netloc:\n        logger.error(\"URL must be from github.com: %s\", repo_url)\n        return \"\", \"\"\n\n    path_parts = parts.path.strip(\"/\").split(\"/\")\n    if len(path_parts) < 2:  # noqa: PLR2004\n        logger.error(\"GitHub URL is missing owner or repo name: %s\", repo_url)\n        return \"\", \"\"\n\n    owner, repo = path_parts[0], path_parts[1]\n    logger.debug(\"Parsed GitHub URL: owner=%s, repo=%s\", owner, repo)\n    return owner, repo\n\n\ndef is_supported_file(file_path: str) -> bool:\n    \"\"\"Check whether the file is supported based on its extension or stem.\"\"\"\n    path = Path(file_path)\n    return path.suffix.lower() in SUPPORTED_EXTENSIONS or path.stem in SUPPORTED_STEMS\n\n\ndef download_and_extract_repo_zip(owner: str, repo: str, branch: str = \"main\") -> Path | None:\n    \"\"\"Download a GitHub repository as a ZIP and extract it.\"\"\"\n    zip_url = f\"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip\"\n    logger.info(\"Downloading ZIP from: %s\", zip_url)\n\n    try:\n        response = requests.get(zip_url, timeout=15)\n        response.raise_for_status()\n    except RequestException:\n        logger.exception(\"Failed to download ZIP: %s\")\n        return None\n\n    temp_dir = Path(tempfile.mkdtemp())\n    zip_path = temp_dir / f\"{repo}.zip\"\n\n    try:\n        zip_path.write_bytes(response.content)\n        with zipfile.ZipFile(zip_path, \"r\") as zip_ref:\n            zip_ref.extractall(temp_dir)\n    except Exception:\n        logger.exception(\"Failed to extract ZIP file: %s\")\n        return None\n\n    extracted_path = temp_dir / f\"{repo}-{branch}\"\n    logger.debug(\"Repository extracted to: %s\", extracted_path)\n    return extracted_path\n\n\ndef fetch_repo_via_zip(repo_url: str, branch: str = \"main\") -> list[dict[str, Any]]:\n    \"\"\"Fetch supported files from a GitHub repository ZIP.\"\"\"\n    owner, repo = parse_gh_repo_url(repo_url)\n    if not owner or not repo:\n        logger.warning(\"Invalid GitHub URL: %s\", repo_url)\n        return []\n\n    repo_path = download_and_extract_repo_zip(owner, repo, branch)\n    if not repo_path or not repo_path.exists():\n        logger.warning(\"Could not download or extract repo: %s\", repo_url)\n        return []\n\n    files: list[dict[str, Any]] = []\n\n    for root, _, filenames in os.walk(repo_path):\n        for filename in filenames:\n            full_path = Path(root) / filename\n            rel_path = full_path.relative_to(repo_path)\n\n            if not is_supported_file(str(full_path)):\n                logger.debug(\"Skipping unsupported file: %s\", rel_path)\n                continue\n\n            try:\n                content = full_path.read_text(encoding=\"utf-8\")\n            except (UnicodeDecodeError, OSError) as exc:\n                logger.warning(\"Skipping %s due to read error: %s\", rel_path, exc)\n                continue\n\n            files.append(\n                {\n                    \"path\": rel_path.as_posix(),\n                    \"language\": full_path.suffix.lstrip(\".\"),\n                    \"type\": \"code\",\n                    \"content\": content,\n                },\n            )\n\n    logger.info(\"Fetched %d supported files from %s\", len(files), repo_url)\n    return files\n"
+  },
+  {
+    "path": "gh_serializer/gh_serializer/run.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Fill later.\"\"\"\n"
+  },
+  {
+    "path": "gh_serializer/gh_serializer/serialize.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Utility to save structured data to a JSON file.\"\"\"\n\nimport json\nimport logging\nfrom pathlib import Path\nfrom typing import Any\n\nlogger = logging.getLogger(__name__)\n\n\ndef save_to_json(data: list[dict[str, Any]], output_path: str) -> None:\n    \"\"\"Save structured data to a JSON file.\n\n    Args:\n        data: A list of dictionaries to serialize as JSON.\n        output_path: Path where the JSON file will be saved.\n\n    Logs:\n        Logs errors if writing or serialization fails.\n\n    \"\"\"\n    try:\n        with Path(output_path).open(\"w\", encoding=\"utf-8\") as f:\n            json.dump(data, f, indent=2, ensure_ascii=False)\n        logger.info(\"Saved data to JSON: %s\", output_path)\n    except (OSError, TypeError):\n        logger.exception(\"Failed to write JSON to %s\", output_path)\n"
+  },
+  {
+    "path": "gh_serializer/gh_serializer/__init__.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Init file for gh_serializer.\"\"\"\n"
+  },
+  {
+    "path": "gh_serializer/gh_serializer/static/file_types.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Static file that contains supported file extensions and file stems for serialization.\"\"\"\n\nSUPPORTED_EXTENSIONS = {\n    # Code files\n    \".py\",\n    \".js\",\n    \".ts\",\n    \".jsx\",\n    \".tsx\",\n    \".c\",\n    \".h\",\n    \".cpp\",\n    \".hpp\",\n    \".cc\",\n    \".cxx\",\n    \".java\",\n    \".kt\",\n    \".kts\",\n    \".rs\",\n    \".go\",\n    \".swift\",\n    # Web/docs\n    \".html\",\n    \".css\",\n    \".scss\",\n    \".md\",\n    \".txt\",\n    \".json\",\n    \".yaml\",\n    \".yml\",\n    \".toml\",\n    \".ini\",\n    \".cfg\",\n}\n\n\nSUPPORTED_STEMS = [\n    \"Dockerfile\",\n]\n"
+  },
+  {
+    "path": "gh_serializer/gh_serializer/static/__init__.py",
+    "language": "py",
+    "type": "code",
+    "content": "\"\"\"Init file for static folder.\"\"\"\n"
+  }
+]
